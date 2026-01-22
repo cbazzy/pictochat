@@ -1,14 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { io, Socket } from "socket.io-client";
 import { MainLayout } from "@/components/MainLayout";
 import { TopScreen } from "@/components/TopScreen";
 import { BottomScreen } from "@/components/BottomScreen";
 import { LoginScreen } from "@/components/LoginScreen";
 import { Message } from "@/lib/types";
-
-let socket: Socket;
 
 export default function Home() {
   const [hasJoined, setHasJoined] = useState(false);
@@ -16,26 +13,29 @@ export default function Home() {
   const [userColor, setUserColor] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
 
+  // Polling logic
   useEffect(() => {
-    // Connect once mounted
-    socket = io("http://localhost:4000");
+    if (!hasJoined) return;
 
-    socket.on("connect", () => {
-      console.log("Connected to server");
-    });
-
-    socket.on("init", (history: Message[]) => {
-      setMessages(history);
-    });
-
-    socket.on("message", (msg: Message) => {
-      setMessages(prev => [...prev, msg]);
-    });
-
-    return () => {
-      socket.disconnect();
+    const fetchMessages = async () => {
+      try {
+        const res = await fetch('/api/messages');
+        if (res.ok) {
+          const data = await res.json();
+          // Rudimentary diffing: just set it. React handles DOM key diffing efficiently enough for 50 items.
+          setMessages(data);
+        }
+      } catch (error) {
+        console.error("Polling error", error);
+      }
     };
-  }, []);
+
+    fetchMessages(); // Initial fetch
+    const interval = setInterval(fetchMessages, 2000); // Poll every 2 seconds
+
+    return () => clearInterval(interval);
+  }, [hasJoined]);
+
 
   const handleJoin = (name: string, color: string) => {
     setUsername(name);
@@ -43,20 +43,26 @@ export default function Home() {
     setHasJoined(true);
   };
 
-  const handleSend = (data: { text?: string, drawing?: string }) => {
-    const newMessage = {
-      id: Date.now().toString(), // Server can replace ID
+  const handleSend = async (data: { text?: string, drawing?: string }) => {
+    // Optimistic update
+    const tempId = Date.now().toString();
+    const newMessage: Message = {
+      id: tempId,
       type: 'user',
       author: username,
-      // timestamp handled by server basically
+      timestamp: Date.now(),
       text: data.text,
       drawing: data.drawing,
       color: userColor
     };
-    // Optimistic updat? Or wait for server echo? 
-    // PictoChat is local wifi so fast. Let's wait for server echo for simplicity 
-    // to avoid dupes if we also listen to broadcast.
-    socket.emit("message", newMessage);
+
+    setMessages(prev => [...prev, newMessage]);
+
+    await fetch('/api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newMessage)
+    });
   };
 
   if (!hasJoined) {
